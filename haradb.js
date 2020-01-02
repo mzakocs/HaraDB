@@ -4,6 +4,7 @@
 
 // Import Node Modules
 var fs = require("fs");
+var mysql = require("mysql")
 var path = require("path");
 var dateFormat = require('dateformat');
 var cfg;
@@ -12,7 +13,7 @@ var cfg;
 exports.register = function () {
     var plugin = this;
 
-    plugin.load_accounting_file_ini();
+    plugin.load_HaraDB_File_Config();
     plugin.register_hook('init_master', 'init_plugin');
     plugin.register_hook('init_child', 'init_plugin');
     plugin.register_hook('queue_outbound', 'set_header_to_note');
@@ -25,33 +26,52 @@ exports.register = function () {
 exports.init_plugin = function (next) {
     // OR Bitwise Operator just in case the config is not setup properly
     var context = this;
-    var storage_path = cfg.main.path || path.join(process.env.HARAKA, "haradb");
+    var storage_path = path.join(process.env.HARAKA, cfg.main.path) || path.join(process.env.HARAKA, "haradb");
     var separator = cfg.main.separator || "     ";
     var file_extension = cfg.main.extension || "tsv";
+    var sqlenabled = cfg.mysql.enabled || "false";
+    var sqlhost = cfg.mysql.host || "localhost";
+    var sqluser = cfg.mysql.user || "admin";
+    var sqlpassword = cfg.mysql.password || "password";
 
     // Global Variables stored in Notes
     server.notes.storage_path = storage_path;
     server.notes.separator = separator;
     server.notes.file_extension = file_extension;
-    server.notes.delivered_path = path.join(storage_path, "delivered");
-    server.notes.deferred_path = path.join(storage_path, "deferred");
-    server.notes.bounce_path = path.join(storage_path, "bounce");
-    server.notes.delivered_fields	= ["type","timeLogged","timeQueued","rcpt","srcMta","srcIp","vmta","jobId","dsnStatus","dsnMsg"];
-    server.notes.deferred_fields	= ["type","timeLogged","timeQueued","rcpt","srcMta","srcIp","vmta","jobId","dsnStatus","dsnMsg","delay"];
-    server.notes.bounce_fields      = ["type","timeLogged","timeQueued","rcpt","srcMta","srcIp","vmta","jobId","dsnStatus","dsnMsg","bounceCat"];
+    server.notes.log_path = path.join(storage_path, "log");
+    server.notes.fields =   ["type","timeLogged","timeQueued","rcpt","srcMta","srcIp","jobId","dsnStatus","dsnMsg","delay"];
+    server.notes.sqltablequery = "CREATE TABLE IF NOT EXIST emails (type VARCHAR(10), TimeLogged VARCHAR(255), TimeQueued VARCHAR(255), Recipient VARCHAR (255), SourceMaterial VARCHAR (255), SourceIP VARCHAR(255), JobID VARCHAR(20), dnsMessage VARCHAR(255), Delay VARCHAR(255)";
 
     // Creating Plugin Directories
     createDirectoryIfNotExist(storage_path);
-    createDirectoryIfNotExist(server.notes.delivered_path);
-    createDirectoryIfNotExist(server.notes.deferred_path);
-    createDirectoryIfNotExist(server.notes.bounce_path);
+    createDirectoryIfNotExist(server.notes.log_path);
 
     // Create Plugin Files
-    GenerateNewFile('delivered');
-    GenerateNewFile('deferred');
-    GenerateNewFile('bounce');
+    GenerateLogFile();
     
-    //Log successful load of plugin
+    // Connect to the SQL Server and create the Database & Table if MySQL is enabled in the config
+    if (sqlenabled = "true") {
+        var mysqlcon = mysql.createConnection({
+            host: sqlhost,
+            user: sqluser,
+            password: sqlpassword
+        });
+        
+        mysqlcon.connect(function(err) {
+            if (err) throw err;
+            context.loginfo("Successfully Connected to MySQL!");
+            mysqlcon.query("CREATE DATABASE IF NOT EXIST haradb;", function (err, result) {
+                if (err) throw err;
+                context.loginfo("Created MySQL database!");
+            });
+            mysql.query (sqltablequery, function(err, result) {
+                if (err) throw err;
+                context.loginfo("Created MySQL table!");
+            });
+        });
+    }      
+
+    // Log successful load of plugin
     context.loginfo("HaraDB is Ready!");
 
     return next();
@@ -73,7 +93,7 @@ exports.delivered = function (next, hmail, params) {
     var fields_values = {};
 
     // A For Each Loop to go through all the fields set up in the config and grab them from the e-mail
-    server.notes.delivered_fields.forEach (function (field) {
+    server.notes.fields.forEach (function (field) {
         switch (field) {
             case "type" :
                 fields_values.type = "Delivered";
@@ -96,9 +116,6 @@ exports.delivered = function (next, hmail, params) {
             case "destIp" :
                 fields_values.destIp = params[1] || " ~ ";
                 break;
-            case "vmta" :
-                fields_values.vmta = server.notes.vmta || " ~ ";
-                break;
             case "jobId" :
                 fields_values.jobId = todo.uuid;
                 break;
@@ -117,9 +134,10 @@ exports.delivered = function (next, hmail, params) {
         }
     });
 
-    addRecord(server.notes.delivered_file_path, server.notes.delivered_fields, fields_values, 'delivered', this);
+    addRecordToFile(server.notes.fields, fields_values);
+    // addRecordToSql(server.notes.fields, fields_values);
 
-    plugin.loginfo("Record Added (Delivered)")
+    plugin.loginfo("Record Added (Delivered)!")
     
     return next();
 };
@@ -133,7 +151,7 @@ exports.deferred = function (next, hmail, params) {
 
     var fields_values = {};
 
-    server.notes.deferred_fields.forEach (function (field) {
+    server.notes.fields.forEach (function(field) {
         switch (field) {
             case "type" :
                 fields_values.type = "Deferred"
@@ -156,9 +174,6 @@ exports.deferred = function (next, hmail, params) {
             case "destIp" :
                 fields_values.destIp = " ~ ";
                 break;
-            case "vmta" :
-                fields_values.vmta = server.notes.vmta || " ~ ";
-                break;
             case "jobId" :
                 fields_values.jobId = todo.uuid;
                 break;
@@ -177,9 +192,10 @@ exports.deferred = function (next, hmail, params) {
         }
     });
 
-    addRecord(server.notes.delivered_file_path, server.notes.deferred_fields, fields_values, 'deferred', this);
+    addRecordToFile(server.notes.fields, fields_values);
+    // addRecordToSql(server.notes.fields, fields_values);
 
-    plugin.loginfo("Record Added (Deferred)");
+    plugin.loginfo("Record Added (Deferred)!");
 
     return next();
 };
@@ -193,7 +209,7 @@ exports.bounce = function(next, hmail, error) {
     
     var fields_values = {};
 
-    server.notes.bounce_Fields.forEach (function(field) {
+    server.notes.fields.forEach (function(field) {
         switch (field) {
             case "type" :
                 fields_values.type = "Bounce";
@@ -216,9 +232,6 @@ exports.bounce = function(next, hmail, error) {
             case "destIp" :
                 fields_values.destIp = " ~ ";
                 break;
-            case "vmta" :
-                fields_values.vmta = server.notes.vmta || " ~ ";
-                break;
             case "jobId" :
                 fields_values.jobId = todo.uuid;
                 break;
@@ -236,30 +249,28 @@ exports.bounce = function(next, hmail, error) {
                 else
                     fields_values.dsnMsg = " ~ ";
                 break;
-            case "bounceCat" :
-                fields_values.bounceCat = rcpt_to.reason || (rcpt_to.dsn_code + " (" + rcpt_to.dsn_msg + ")");
-                break;
             case "delay" :
                 fields_values.delay = " ~ ";
                 break;
             }
         });
 
-        addRecord(server.notes.bounce_file_path, server.notes.bounce_fields, fields_values, 'bounce', this);
+        addRecordToFile(server.notes.fields, fields_values);
+        // addRecordToSql(server.notes.fields, fields_values);
 
-        plugin.loginfo("Record Added (Bounce)")
+        plugin.loginfo("Record Added (Bounce)!")
 
         // Prevents Haraka from sending the boucned email back to the original sender
         return next(OK);
 };
 
 exports.shutdown = function () { 
-    plugin.loginfo("Shutting Down HaraDB");
+    plugin.loginfo("Shutting Down HaraDB!");
 };
 
 exports.load_HaraDB_File_Config = function () {
     var plugin = this;
-    plugin.loginfo("HaraDB Configs Loaded from haradb.ini")
+    plugin.loginfo("HaraDB Configs Loaded from haradb.ini!")
     cfg = plugin.config.get("haradb.ini", function() {
         plugin.register();
     });
@@ -267,37 +278,15 @@ exports.load_HaraDB_File_Config = function () {
 };
 
 // Generates a file based on the type of message that was sent or received.
-var GenerateNewFile = function (type){
-    if ( type == 'delivered' ){
-        // Sets the path, filename and filetype of the log file.
-        server.notes.delivered_file_path = path.join( server.notes.delivered_dir_path, "d." + dateFormat(new Date(), "yyyy-mm-dd-HHMMss") + "." + server.notes.files_extension);
-        
-        // Creates the delivered log file in the specified path and fields.
-        createFileIfNotExist(server.notes.delivered_file_path, server.notes.delivered_fields);
+var GenerateLogFile = function (){
+    // Sets the path, filename and filetype of the log file.
+    server.notes.log_path = path.join(server.notes.log_path, "d." + dateFormat(new Date(), "yyyy-mm-dd  HH-MM-ss") + "." + server.notes.files_extension);
+    
+    // Creates the delivered log file in the specified path and fields.
+    createFileIfNotExist(server.notes.log_path, server.notes.delivered_fields);
 
-        // Function returns the path where the file was created.
-        return path.basename(server.notes.delivered_file_path);
-    }
-    else if ( type == 'deferred' ){
-        // Sets the path, filename and filetype of the log file.
-        server.notes.deferred_file_path = path.join( server.notes.deferred_dir_path, "t." + dateFormat(new Date(), "yyyy-mm-dd-HHMMss") + "." + server.notes.files_extension);
-        
-        // Creates the deferred log file in the specified path and fields.
-        createFileIfNotExist(server.notes.deferred_file_path, server.notes.deferred_fields);
-
-        // Function returns the path where the file was created.
-        return path.basename(server.notes.deferred_file_path);
-    }
-    else if ( type == 'bounce' ){
-        // Sets the path, filename and filetype of the log file.
-        server.notes.bounce_file_path = path.join( server.notes.bounce_dir_path, "b." + dateFormat(new Date(), "yyyy-mm-dd-HHMMss") + "." + server.notes.files_extension);
-        
-        // Creates the bounce log file in the specified path and fields.
-        createFileIfNotExist(server.notes.bounce_file_path, server.notes.bounce_fields);
-
-        // Function returns the path where the file was created.
-        return path.basename(server.notes.bounce_file_path);
-    }
+    // Function returns the path where the file was created.
+    return path.basename(server.notes.log_path);
 };
 
 // Creates the directory if it does not exist.
@@ -329,13 +318,25 @@ var setHeaderFromFields = function (filename, fields) {
 };
 
 // Adds a new record to the log file based on the fields
-var addRecord = function (filename, fields, fields_values, type, context) {
+var addRecordToFile = function (fields, fields_values) {
     var separator 	= server.notes.separator;
     var record 		= "";
 
+    // Puts the record into the file under their respective fields
     fields.forEach  ( function (field) {
         record += fields_values[field] + separator;
     });
 
-    fs.appendFileSync(filename, record + "\r\n");
+    // Finally edits the file with the new record
+    fs.appendFileSync(server.notes.log_path, record + "\r\n");
 };
+
+// var addRecordToSql = function (fields, fields_values) {
+//     if (sqlenabled = "true") {
+//         var separator = server.notes.separator;
+//         fields.forEach (function(field) {
+            
+//         });
+
+//     }
+// }
