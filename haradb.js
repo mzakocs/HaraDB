@@ -7,27 +7,31 @@
 var fs = require("fs");
 var pg = require("pg")
 var path = require("path");
-var dateFormat = require('dateformat');
+var dateFormat = require("dateformat");
 var cfg;
+var file_enabled;
+var pg_enabled;
 
 // Register Function: Setup Config and Hooks
 exports.register = function () {
     var plugin = this;
-
     plugin.load_HaraDB_File_Config();
     plugin.register_hook('init_master', 'init_plugin');
     plugin.register_hook('init_child', 'init_plugin');
     plugin.register_hook('queue_outbound', 'set_header_to_note');
     plugin.register_hook('delivered', 'delivered');
     plugin.register_hook('deferred', 'deferred');
-    plugin.register_hook('bounce', 'boucne');
-    // OR Bitwise Operator just in case the config is not setup properly
-    var context = this;
-    var file_enabled = cfg.filelogging.enabled || "true";
+    plugin.register_hook('bounce', 'bounce');
+}
+
+exports.init_plugin = function (next) {
+    var plugin = this;
+    // Gets all of the values from the config file
+    file_enabled = cfg.filelogging.enabled || "true";
     var storage_path = cfg.filelogging.storagepath || path.join("default", "haradb");
     var separator = cfg.filelogging.separator || "     ";
     var file_extension = cfg.filelogging.extension || "tsv";
-    var pg_enabled = cfg.postgres.enabled || "false";
+    pg_enabled = cfg.postgres.enabled || "false";
     var pg_host = cfg.postgres.host || "localhost";
     var pg_user = cfg.postgres.user || "admin";
     var pg_database = cfg.postgres.database || "haradb";
@@ -39,9 +43,7 @@ exports.register = function () {
     server.notes.separator = separator;
     server.notes.file_extension = file_extension;
     server.notes.log_path = path.join(storage_path, "log");
-    server.notes.fields =   ["type","timeLogged","timeQueued","rcpt","srcMta","srcIp","jobId","dsnStatus","dsnMsg","delay"];
-    server.notes.pgdatabasequery = "CREATE DATABASE IF NOT EXIST haradb;";
-    server.notes.pgtablequery = "CREATE TABLE IF NOT EXIST emails (type VARCHAR(10), TimeLogged VARCHAR(255), TimeQueued VARCHAR(255), Recipient VARCHAR (255), SourceMaterial VARCHAR (255), SourceIP VARCHAR(255), JobID VARCHAR(20), dnsMessage VARCHAR(255), Delay VARCHAR(255)";
+    server.notes.fields =   ["jobId", "type","timeLogged","timeQueued","rcpt","srcMta","srcIp","dsnStatus","dsnMsg","delay"];
 
     // File Logging Setup
     // Creates the logging directories and the log file
@@ -64,16 +66,18 @@ exports.register = function () {
             password: pg_password,
             port: pg_port
         });
-        setupDatabaseAndTables();
+        plugin.setupTable();
     }      
 
     // Log successful load of plugin
-    context.loginfo("HaraDB is Ready!");
-}
+    plugin.loginfo("HaraDB is Ready!");
+    return next();
+};
 
     // Sets the header of the email to a global note variable for future use with the custom_FIELD parameter
-    exports.set_header_to_note = function (next, connection) {
+exports.set_header_to_note = function (next, connection) {
     connection.transaction.notes.header = connection.transaction.header;
+    return next();
 };
 
 // Delivered Function: Harvests Information from delivered e-mails to log
@@ -129,7 +133,7 @@ exports.delivered = function (next, hmail, params) {
     });
 
     addRecordToFile(server.notes.fields, fields_values);
-    addRecordToDatabase(server.notes.fields, fields_values);
+    plugin.addRecordToDatabase(server.notes.fields, fields_values);
 
     plugin.loginfo("Record Added (Delivered)!")
     
@@ -187,7 +191,7 @@ exports.deferred = function (next, hmail, params) {
     });
 
     addRecordToFile(server.notes.fields, fields_values);
-    addRecordToDatabase(server.notes.fields, fields_values);
+    plugin.addRecordToDatabase(server.notes.fields, fields_values);
 
     plugin.loginfo("Record Added (Deferred)!");
 
@@ -250,7 +254,7 @@ exports.bounce = function(next, hmail, error) {
         });
 
         addRecordToFile(server.notes.fields, fields_values);
-        addRecordToDatabase(server.notes.fields, fields_values);
+        plugin.addRecordToDatabase(server.notes.fields, fields_values);
 
         plugin.loginfo("Record Added (Bounce)!")
 
@@ -269,13 +273,71 @@ exports.load_HaraDB_File_Config = function () {
     cfg = plugin.config.get("haradb.ini", function() {
         plugin.register();
     });
-    plugin.loginfo(cfg);
+};
+
+exports.setupTable = function () {
+    if (pg_enabled = "true") {
+        var plugin = this;
+        var pgtableQuery = 'CREATE TABLE IF NOT EXISTS emails(JobID VARCHAR(50) PRIMARY KEY, type VARCHAR(15), TimeLogged TIMESTAMP, TimeQueued TIMESTAMP, Recipient VARCHAR (255), SourceMaterial VARCHAR (255), SourceIP VARCHAR(255), dsnStatus VARCHAR(255), dsnMessage VARCHAR(255), Delay VARCHAR(255))';
+        // Connects to the pool to get a client
+        plugin.pgQuery_text(pgtableQuery);
+    }
+};
+
+exports.addRecordToDatabase = function (fields, fields_values) {
+    if (pg_enabled = "true") {
+        var plugin = this;
+        var values = [];
+        fields.forEach(function(field) {
+            values.push(fields_values[field]);
+        });
+        var recordQuery = 'INSERT INTO emails(JobID, type, TimeLogged, TimeQueued, Recipient, SourceMaterial, SourceIP, dsnStatus, dsnMessage, Delay) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)';
+        plugin.pgQuery_values(recordQuery, values);
+    }
+};
+
+// Used for queries with only text
+exports.pgQuery_text = function (text) {
+    var plugin = this;
+    plugin.pool.connect(function (conErr, client, done) {
+        if (conErr) {
+            plugin.logerror('Error fetching client from PG pool ' + conErr);
+        }
+        // Uses the pooled client to send a query with text only to the database
+        client.query(text, function (err, result) {
+            // Releases the client back to the pool
+            done();
+
+            if (err) {
+                plugin.logerror('Error running query ' + err);
+            }
+        });
+    });
+};
+
+// Used for queries with text and values
+exports.pgQuery_values = function (text, values) {
+    var plugin = this;
+    plugin.pool.connect(function (conErr, client, done) {
+        if (conErr) {
+            plugin.logerror('Error fetching client from PG pool ' + conErr);
+        }
+        // Uses the pooled client to send a query with text and values to the database
+        client.query(text, values, function (err, result) {
+            // Releases the client back to the pool
+            done();
+
+            if (err) {
+                plugin.logerror('Error running query ' + err);
+            }
+        });
+    });
 };
 
 // Generates a file based on the type of message that was sent or received.
 var GenerateLogFile = function (){
     // Sets the path, filename and filetype of the log file.
-    server.notes.log_path = path.join(server.notes.log_path, "d." + dateFormat(new Date(), "yyyy-mm-dd  HH-MM-ss") + "." + server.notes.files_extension);
+    server.notes.log_path = path.join(server.notes.log_path, + dateFormat(new Date(), "yyyy-mm-dd-HHMMss") + "." + server.notes.file_extension);
     
     // Creates the delivered log file in the specified path and fields.
     createFileIfNotExist(server.notes.log_path, server.notes.fields);
@@ -312,22 +374,6 @@ var setHeaderFromFields = function (filename, fields) {
     fs.writeFileSync(filename, headers + "\r\n");
 };
 
-var setupDatabaseAndTables = function () {
-    const plugin = this;
-    var pgdatabasequery = "CREATE DATABASE IF NOT EXIST haradb;";
-    plugin.pool.query(pgdatabasequery, (err, res) => {
-        if (err) {
-            throw err
-        }
-    });
-    var pgtablequery = "CREATE TABLE IF NOT EXIST emails (type VARCHAR(10), TimeLogged VARCHAR(255), TimeQueued VARCHAR(255), Recipient VARCHAR (255), SourceMaterial VARCHAR (255), SourceIP VARCHAR(255), JobID VARCHAR(20), dnsMessage VARCHAR(255), Delay VARCHAR(255)";
-    plugin.pool.query(pgtablequery, (err,res) => {
-        if (err) {
-            throw err
-        }
-    });
-};
-
 // Adds a new record to the log file based on the fields
 var addRecordToFile = function (fields, fields_values) {
     if (file_enabled = "true") {
@@ -341,31 +387,5 @@ var addRecordToFile = function (fields, fields_values) {
 
         // Finally edits the file with the new record
         fs.appendFileSync(server.notes.log_path, record + "\r\n");
-    }
-};
-
-var addRecordToDatabase = function (fields_values) {
-    if (pgenabled = "true") {
-        const plugin = this;
-        const recordQuery = 'INSERT INTO haradb (type, TimeLogged, TimeQueued, Recipient, SourceMaterial, SourceIP, JobID, dnsMessage, Delay) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)';
-        // Connects to the pool to get a client
-        plugin.pool.connect(function (conErr, client, done) {
-            if (conErr) {
-                plugin.logerror('Error fetching client from PG pool: ' + conErr);
-                return callback(false);
-            }
-            // Uses the pooled client to send a query to the database
-            client.query(recordQuery, fields_Values, function (err, result) {
-                // Releases the client back to the pool
-                done();
-
-                if (err) {
-                    plugin.logerror('Error running query: ' + err);
-                    return callback(false);
-                }
-
-                return callback(result.rows[0].exists);
-            });
-        });
     }
 };
