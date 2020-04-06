@@ -4,7 +4,6 @@
 // ------------------------------------
 
 // Import Node Modules
-var fs = require("fs");
 var pg = require("pg")
 var dateFormat = require("dateformat");
 var cfg;
@@ -30,31 +29,23 @@ exports.init_plugin = function (next) {
     var pg_database = cfg.postgres.database || "haradb";
     var pg_password = cfg.postgres.password || "password";
     var pg_port = cfg.postgres.port || "3211";
-
-    // File Logging Setup
-    // Creates the logging directories and the log file
-    if (file_enabled = "true") {
-        // Creating Plugin Directories
-        createDirectoryIfNotExist(storage_path);
-        createDirectoryIfNotExist(server.notes.log_path);
-
-        // Creates the log file
-        GenerateLogFile();
-    }
     
     // Postgres Logging Setup
     // Connects to the Postgres Server and create the Pool, Database & Table if PG is enabled in the config
-    this.pool = new pg.Pool({
-        user: pg_user,
-        host: pg_host,
-        database: pg_database,
-        password: pg_password,
-        port: pg_port
-    });
-    plugin.setupTable();
-
-    // Log successful load of plugin
-    plugin.loginfo("HaraDB is Ready!");
+    try {
+        this.pool = new pg.Pool({
+            user: pg_user,
+            host: pg_host,
+            database: pg_database,
+            password: pg_password,
+            port: pg_port
+        });
+        plugin.setupTable();
+        plugin.loginfo("HaraDB is Ready!");
+    }
+    catch(err) {
+        plugin.logerror("Failed to Connect to PostgreSQL database!");
+    }
     return next();
 };
 
