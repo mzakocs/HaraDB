@@ -99,6 +99,7 @@ exports.send_email = function (next, hmail) {
     // Grabs and pushes the e-mails body text
     valueArray.push(hmail.notes.body.bodytext.toString());
 
+    plugin.addEmailToTable(valueArray);
 
     return next();
 }
@@ -116,7 +117,7 @@ exports.delivered = function (next, hmail, params) {
 
     // Grab and store the parent email id
     var parentEmailConnectionID = todo.uuid.split(".")[0]; // Takes the job ID and converts it to the parents email original connection ID
-    valueArray.push(this.findEmailID(parentEmailConnectionID));
+    valueArray.push(plugin.findEmailID(parentEmailConnectionID));
 
     // Grab and store the event type
     valueArray.push("Delivered");
@@ -143,7 +144,7 @@ exports.deferred = function (next, hmail, params) {
 
     // Grab and store the parent email id
     var parentEmailConnectionID = todo.uuid.split(".")[0]; // Takes the job ID and converts it to the parents email original connection ID
-    valueArray.push(this.findEmailID(parentEmailConnectionID));
+    valueArray.push(plugin.findEmailID(parentEmailConnectionID));
 
     // Grab and store the event type
     valueArray.push("Defer");
@@ -170,7 +171,7 @@ exports.bounce = function(next, hmail, error) {
 
     // Grab and store the parent email id
     var parentEmailConnectionID = todo.uuid.split(".")[0]; // Takes the job ID and converts it to the parents email original connection ID
-    valueArray.push(this.findEmailID(parentEmailConnectionID));
+    valueArray.push(plugin.findEmailID(parentEmailConnectionID));
 
     // Grab and store the event type
     valueArray.push("Bounce");
@@ -248,7 +249,6 @@ exports.setupTables = function () {
 exports.addEmailToTable = function (values) {
     // Adds an email entry into the emails table.
     var plugin = this;
-    // QUERY IS INCORRECT, CHANGE BEFORE USE
     var emailQuery = 'IINSERT INTO emails(connection_id, recipients, sender, header, body) VALUES ($1, $2, $3, $4, $5)';
     plugin.pgQueryValues(emailQuery, values);
 };
