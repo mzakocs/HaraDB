@@ -37,6 +37,7 @@ Until I get the package up onto NPM, the plugin must be installed manually:
 3. Drag the "config/haradb.ini" into your config directory in your haraka server.
 4. Configure the ini file with your PostgreSQL login details.
 5. Edit the SQL queries if neccessary to fit your demands.
+6. Add the line 'haradb' to the /config/plugins file and launch the server.
 
 ## Contributing
 

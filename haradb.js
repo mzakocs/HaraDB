@@ -28,24 +28,19 @@ exports.init_plugin = function (next) {
     var pg_user = cfg.postgres.user || "admin";
     var pg_database = cfg.postgres.database || "haradb";
     var pg_password = cfg.postgres.password || "password";
-    var pg_port = cfg.postgres.port || "3211";
+    var pg_port = cfg.postgres.port || "5432";
     
     // Postgres Logging Setup
     // Connects to the Postgres Server and create the Pool, Database & Table if PG is enabled in the config
-    try {
-        this.pool = new pg.Pool({
-            user: pg_user,
-            host: pg_host,
-            database: pg_database,
-            password: pg_password,
-            port: pg_port
-        });
-        plugin.setupTable();
-        plugin.loginfo("HaraDB is Ready!");
-    }
-    catch(err) {
-        plugin.logerror("Failed to Connect to PostgreSQL database!");
-    }
+    this.pool = new pg.Pool({
+        user: pg_user,
+        host: pg_host,
+        database: pg_database,
+        password: pg_password,
+        port: pg_port
+    });
+    plugin.setupTables();
+    plugin.loginfo("HaraDB is Ready!");
     return next();
 };
 
@@ -243,13 +238,13 @@ exports.setupTables = function () {
 
     // Sets up the emails table
     var emailsTableQuery = 'CREATE TABLE IF NOT EXISTS emails(email_id BIGSERIAL PRIMARY KEY NOT NULL, job_id UUID NOT NULL, recipients TEXT NOT NULL, sender TEXT NOT NULL, header TEXT, body TEXT)';
-    plugins.pgQueryText(emailsTableQuery);
+    plugin.pgQueryText(emailsTableQuery);
 };
 
 exports.addEmailToTable = function (values) {
     // Adds an email entry into the emails table.
     var plugin = this;
-    var emailQuery = 'IINSERT INTO emails(connection_id, recipients, sender, header, body) VALUES ($1, $2, $3, $4, $5)';
+    var emailQuery = 'INSERT INTO emails(connection_id, recipients, sender, header, body) VALUES ($1, $2, $3, $4, $5)';
     plugin.pgQueryValues(emailQuery, values);
 };
 
