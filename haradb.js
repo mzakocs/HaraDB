@@ -39,15 +39,11 @@ exports.init_plugin = function (next) {
         password: pg_password,
         port: pg_port
     });
-    // Grabs a postgres client from the pool and sets up tables
-    plugin.pool.connect(function (conErr, client, done) {
-        if (conErr) {
-            plugin.logerror('Error fetching client from PG pool ' + conErr);
-        }
-        var client = client;
-        plugin.setupTables(client);
-        done();
-    });
+    
+    // Creates the respective e-mail and event table if they do not exist
+    plugin.setupTables();
+
+    // Plugin loaded successfully
     plugin.loginfo("HaraDB is Ready!");
     return next();
 };
@@ -66,7 +62,7 @@ exports.data = function (next, connection)
     next();
 }
 
-// Sets the header and body of the email to a global note variable for future use with the custom_FIELD parameter
+// Sets the header and body of the email to a global note variable for future use
 exports.set_header_and_body_to_note = function (next, connection) {
     // Imports the connection ID, header and body
     connection.transaction.notes.header = connection.transaction.header; // Header object from Haraka
@@ -76,6 +72,9 @@ exports.set_header_and_body_to_note = function (next, connection) {
 };
 
 exports.send_email = function (next, hmail) {
+    /* This event occurs when an e-mail initially gets sent */
+    /* Records the actual content of the e-mail */
+
     // Imports
     var plugin = this;
     var todo = hmail.todo;
@@ -83,202 +82,230 @@ exports.send_email = function (next, hmail) {
     // Makes sure the email is actually valid, if not it skips the e-mail.
     if (!todo) return next();
 
-    // Grabs a postgres client from the pool
-    // Introduced as a fix to other queries happening faster than ones that had been queued before
-    plugin.pool.connect(function (conErr, client, done) {
-        if (conErr) {
-            plugin.logerror('Error fetching client from PG pool ' + conErr);
-        }
-        // Array used to store each value for the query
-        var valueArray = [];
+    // Array used to store each value for the query
+    var valueArray = [];
 
-        // Grabs and pushes the connection ID
+    // Grabs and pushes the connection ID
+    try {
         valueArray.push(hmail.notes.connectionid.toString().toLowerCase());
+    }
+    catch (err) {
+        // If it's an invalid e-mail, sometimes it won't have a connection ID
+        // In that case just push nothing
+        valueArray.push("");
+    }
 
-        // Grabs and pushes the concantenated string of all the recipients
-        // TODO: Figure out a better solution to store the recipients, current concantenated string is not a good idea for SQL querying
-        valueArray.push(todo.rcpt_to.join(", ").replace("<", "").replace(">", ""));
+    // Grabs and pushes the sender
+    valueArray.push(todo.mail_from.toString().replace("<", "").replace(">", ""));
 
-        // Grabs and pushes the sender
-        valueArray.push(todo.mail_from.toString().replace("<", "").replace(">", ""));
+    // Grabs and pushes the e-mails subject text
+    valueArray.push(hmail.notes.header["headers_decoded"]["subject"].toString()); 
 
-        // Grabs and pushes the e-mails subject text
-        valueArray.push(hmail.notes.header["headers_decoded"]["subject"].toString()); 
+    // Grabs and pushes the e-mails body text
+    valueArray.push(hmail.notes.body.bodytext.toString());
 
-        // Grabs and pushes the e-mails body text
-        valueArray.push(hmail.notes.body.bodytext.toString());
+    // Grabs and pushes the entire MIME object
+    valueArray.push(hmail.notes.body.header.toString() + "\n\n" + hmail.notes.body.children.toString());
 
-        plugin.addEmailToTable(client, valueArray);
+    // Grab and store the time queued
+    valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
 
-        // Returns the client back to the pool
-        done();
-    });
+    plugin.addEmailToTable(valueArray);
     return next();
 }
 
 exports.delivered = function (next, hmail, params) {
+    /* This event occurs when an e-mail gets delivered to the recipient */
+    
     // Imports
     var plugin = this;
     var todo = hmail.todo;
+    var rcpt_to = todo.rcpt_to[0];
     
     // Makes sure the email is actually valid, if not it skips the e-mail.
     if (!todo) return next();
 
-    // Grabs a postgres client from the pool
-    // Introduced as a fix to other queries happening faster than ones that had been queued before
-    plugin.pool.connect(function (conErr, client, done) {
-        if (conErr) {
-            plugin.logerror('Error fetching client from PG pool ' + conErr);
-        }
-        // Array used to store each value for the query
-        var valueArray = [];
+    // Array used to store each value for the query
+    var valueArray = [];
 
-        // Grab and store the parent email id
-        var parentEmailConnectionID = todo.uuid.split(".")[0].toLowerCase(); // Takes the job ID and converts it to the parents email original connection ID
-        valueArray.push(parentEmailConnectionID);
+    // Grab and store the parent email id
+    var parentEmailConnectionID = todo.uuid.split(".")[0].toLowerCase(); // Takes the job ID and converts it to the parents email original connection ID
+    valueArray.push(parentEmailConnectionID);
 
-        // Grab and store the event type
-        valueArray.push("Delivered");
+    // Grabs and pushes the concantenated string of all the recipients
+    valueArray.push(rcpt_to.original.slice(1, -1));
 
-        // Grab and store the time queued
-        valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
+    // Grab and store the event type
+    valueArray.push("Delivered");
 
-        // Add the entry to the SQL database if database saving is enabled
-        plugin.addEventToTable(client, valueArray);
+    // Grab and store the delivery status notification message
+    var dsnMsg;
+    if (rcpt_to.hasOwnProperty("dsn_code")) dsnMsg = rcpt_to.reason || (rcpt_to.dsn_code + " " + rcpt_to.dsn_msg);
+    else if (rcpt_to.hasOwnProperty("dsn_smtp_code")) dsnMsg = rcpt_to.dsn_smtp_code + " " + rcpt_to.dsn_status + " " + rcpt_to.dsn_smtp_response;
+    else dsnMsg = "";
+    valueArray.push(dsnMsg);
 
-        // Returns the client back to the pool
-        done();
-    });
+    // Grab and store the time queued
+    valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
+
+    // Add the entry to the SQL database if database saving is enabled
+    plugin.addEventToTable(valueArray);
+
     return next();
 };
 
 exports.deferred = function (next, hmail, params) {
+    /* This event occurs when an e-mail gets deferred by the e-mail server */
+
     // Imports
     var plugin = this;
     var todo = hmail.todo;
+    var rcpt_to = todo.rcpt_to[0];
     
     // Makes sure the email is actually valid, if not it skips the e-mail
     if (!todo) return next();
 
-    // Grabs a postgres client from the pool
-    // Introduced as a fix to other queries happening faster than ones that had been queued before
-    plugin.pool.connect(function (conErr, client, done) {
-        if (conErr) {
-            plugin.logerror('Error fetching client from PG pool ' + conErr);
-        }
+    // Array used to store each value for the query
+    var valueArray = [];
 
-        // Array used to store each value for the query
-        var valueArray = [];
+    // Grab and store the parent email id
+    var parentEmailConnectionID = todo.uuid.split(".")[0].toLowerCase(); // Takes the job ID and converts it to the parents email original connection ID
+    valueArray.push(parentEmailConnectionID);
 
-        // Grab and store the parent email id
-        var parentEmailConnectionID = plugin.findEmailID(client, todo.uuid.split(".")[0].toLowerCase()); // Takes the job ID and converts it to the parents email original connection ID
-        valueArray.push(parentEmailConnectionID);
+    // Grabs and pushes the concantenated string of all the recipients
+    valueArray.push(rcpt_to.original.slice(1, -1));
 
-        // Grab and store the event type
-        valueArray.push("Defer");
+    // Grab and store the event type
+    valueArray.push("Defer");
 
-        // Grab and store the time queued
-        valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
+    // Grab and store the delivery status notification message
+    var dsnMsg;
+    if (rcpt_to.hasOwnProperty("dsn_code")) dsnMsg = rcpt_to.reason || (rcpt_to.dsn_code + " " + rcpt_to.dsn_msg);
+    else if (rcpt_to.hasOwnProperty("dsn_smtp_code")) dsnMsg = rcpt_to.dsn_smtp_code + " " + rcpt_to.dsn_status + " " + rcpt_to.dsn_smtp_response;
+    else dsnMsg = "";
+    valueArray.push(dsnMsg);
 
-        // Add the entry to the SQL database if database saving is enabled
-        plugin.addEventToTable(client, valueArray);
+    // Grab and store the time queued
+    valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
 
-        // Returns the client back to the pool
-        done();
-    });
+    // Add the entry to the SQL database if database saving is enabled
+    plugin.addEventToTable(valueArray);
+
     return next();
 };
 
 exports.bounce = function(next, hmail, error) {
+    /* This event occurs when an e-mail gets bounced by the recipients mail server */
+    /* Will NOT be sent again, the e-mail will be dropped */
+
+    // TODO: Create a table in the database with a list of e-mail addresses that bounce
+
     // Imports
     var plugin = this;
     var todo = hmail.todo;
+    var rcpt_to = todo.rcpt_to[0];
     
     // Makes sure the email is actually valid, if not it skips the e-mail
     if (!todo) return next();
 
-    // Grabs a postgres client from the pool
-    // Introduced as a fix to other queries happening faster than ones that had been queued before
-    plugin.pool.connect(function (conErr, client, done) {
-        if (conErr) {
-            plugin.logerror('Error fetching client from PG pool ' + conErr);
-        }
-        // Array used to store each value for the query
-        var valueArray = [];
+    // Array used to store each value for the query
+    var valueArray = [];
 
-        // Grab and store the parent email id
-        var parentEmailConnectionID = plugin.findEmailID(client, todo.uuid.split(".")[0].toLowerCase()); // Takes the job ID and converts it to the parents email original connection ID
-        valueArray.push(parentEmailConnectionID);
+    // Grab and store the parent email id
+    var parentEmailConnectionID = todo.uuid.split(".")[0].toLowerCase(); // Takes the job ID and converts it to the parents email original connection ID
+    valueArray.push(parentEmailConnectionID);
 
-        // Grab and store the event type
-        valueArray.push("Bounce");
+    // Grabs and pushes the concantenated string of all the recipients
+    valueArray.push(rcpt_to.original.slice(1, -1));
 
-        // Grab and store the time queued
-        valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
+    // Grab and store the event type
+    valueArray.push("Bounce");
 
-        // Add the entry to the SQL database if database saving is enabled
-        plugin.addEventToTable(client, valueArray);
+    // Grab and store the delivery status notification message
+    var dsnMsg;
+    if (rcpt_to.hasOwnProperty("dsn_code")) dsnMsg = rcpt_to.reason || (rcpt_to.dsn_code + " " + rcpt_to.dsn_msg);
+    else if (rcpt_to.hasOwnProperty("dsn_smtp_code")) dsnMsg = rcpt_to.dsn_smtp_code + " " + rcpt_to.dsn_status + " " + rcpt_to.dsn_smtp_response;
+    else dsnMsg = "";
+    valueArray.push(dsnMsg);
 
-        // Returns the client back to the pool
-        done();
+    // Grab and store the time queued
+    valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
 
-    });
+    // Add the entry to the SQL database if database saving is enabled
+    plugin.addEventToTable(valueArray);
+
     // Prevents Haraka from sending the bounced email back to the original sender
     return next(OK);
 };
 
-exports.setupTables = function (client) {
+exports.setupTables = function () {
     // Sets up the tables on plugin startup if they do not already exist.
     var plugin = this;
 
     // Sets up the event table
-    var eventsTableQuery = 'CREATE TABLE IF NOT EXISTS events(event_id BIGSERIAL PRIMARY KEY NOT NULL, email_id INTEGER NOT NULL, event_type TEXT NOT NULL, time_queued TIMESTAMP NOT NULL)';
-    plugin.pgQueryText(client, eventsTableQuery);
+    var eventsTableQuery = 'CREATE TABLE IF NOT EXISTS events(event_id BIGSERIAL PRIMARY KEY NOT NULL, email_id INTEGER NOT NULL, recipient TEXT NOT NULL, event_type TEXT NOT NULL, dsn_message TEXT, time TIMESTAMP NOT NULL)';
+    plugin.pgQueryText(eventsTableQuery);
 
     // Sets up the emails table
-    var emailsTableQuery = 'CREATE TABLE IF NOT EXISTS emails(email_id BIGSERIAL PRIMARY KEY NOT NULL, connection_id UUID NOT NULL, recipients TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT, body TEXT)';
-    plugin.pgQueryText(client, emailsTableQuery);
+    var emailsTableQuery = 'CREATE TABLE IF NOT EXISTS emails(email_id BIGSERIAL PRIMARY KEY NOT NULL, connection_id UUID UNIQUE, sender TEXT NOT NULL, subject TEXT, body TEXT, mime TEXT, time TIMESTAMP NOT NULL)';
+    plugin.pgQueryText(emailsTableQuery);
 };
 
-exports.addEmailToTable = function (client, values) {
-    // Adds an email entry into the emails table.
-    var plugin = this;
-    var emailQuery = 'INSERT INTO emails(connection_id, recipients, sender, subject, body) VALUES ($1, $2, $3, $4, $5)';
-    plugin.pgQueryValues(client, emailQuery, values);
-    plugin.loginfo("Logged " + values[0] + " e-mail into database");
-};
-
-exports.addEventToTable = function (client, values) {
+exports.addEventToTable = function (values) {
     // Adds an event entry into the events table.
     var plugin = this;
-    var eventQuery = 'INSERT INTO events(email_id, event_type, time_queued) SELECT email_id, $2, $3 FROM emails WHERE connection_id = $1 LIMIT 1';
-    plugin.pgQueryValues(client, eventQuery, values);
+    var eventQuery = 'INSERT INTO events(email_id, recipient, event_type, dsn_message, time) SELECT email_id, $2, $3, $4, $5 FROM emails WHERE connection_id = $1 LIMIT 1';
+    plugin.pgQueryValues(eventQuery, values);
     plugin.loginfo("Logged " + values[0] + " " + values[1] + " event into database");
 };
 
-exports.pgQueryText = function (client, text) {
+exports.addEmailToTable = function (values) {
+    // Adds an email entry into the emails table.
+    var plugin = this;
+    var emailQuery = 'INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (connection_id) DO NOTHING';
+    plugin.pgQueryValues(emailQuery, values);
+    plugin.loginfo("Logged " + values[0] + " e-mail into database");
+};
+
+exports.pgQueryText = function (text) {
     // Sends a query with only text.
     var plugin = this;
-    // Uses the pooled client to send a query with text only to the database
-    client.query(text, function (err, result) {
-        if (err) {
-            plugin.logerror('Error running query ' + err);
+    plugin.pool.connect(function (conErr, client, done) {
+        if (conErr) {
+            plugin.logerror('Error fetching client from PG pool ' + conErr);
         }
-        return result;
+        // Uses the pooled client to send a query with text only to the database
+        client.query(text, function (err, result) {
+            // Releases the client back to the pool
+            done();
+
+            if (err) {
+                plugin.logerror('Error running query ' + err);
+            }
+            return result;
+        });
     });
 };
 
-exports.pgQueryValues = function (client, text, values) {
+exports.pgQueryValues = function (text, values) {
     // Sends a query with text and values.
     var plugin = this;
-    // Uses the pooled client to send a query with text and values to the database
-    client.query(text, values, function (err, result) {
-        if (err) {
-            plugin.logerror('Error running query ' + err);
+    plugin.pool.connect(function (conErr, client, done) {
+        if (conErr) {
+            plugin.logerror('Error fetching client from PG pool ' + conErr);
         }
-        return result;
+        // Uses the pooled client to send a query with text and values to the database
+        client.query(text, values, function (err, result) {
+            // Releases the client back to the pool
+            done();
+            if (err) {
+                plugin.logerror('Error running query ' + err);
+            }
+            return result;
+        });
     });
 };
+
 
 exports.load_HaraDB_File_Config = function () {
     // Loads the config for Haraka.
