@@ -86,29 +86,28 @@ exports.send_email = function (next, hmail) {
     var valueArray = [];
 
     // Grabs and pushes the connection ID
-    try {
-        valueArray.push(hmail.notes.connectionid.toString().toLowerCase());
-    }
-    catch (err) {
-        // If it's an invalid e-mail, sometimes it won't have a connection ID
-        // In that case just push nothing
-        valueArray.push("");
-    }
+    const connectionid = hmail.notes.connectionid.toString().toLowerCase();
+    valueArray.push(connectionid);
 
     // Grabs and pushes the sender
-    valueArray.push(todo.mail_from.toString().replace("<", "").replace(">", ""));
+    const mail_from = todo.mail_from.toString().replace("<", "").replace(">", "");
+    valueArray.push(mail_from);
 
     // Grabs and pushes the e-mails subject text
-    valueArray.push(hmail.notes.header["headers_decoded"]["subject"].toString()); 
+    const decoded_subject = hmail.notes.header["headers_decoded"]["subject"].toString();
+    valueArray.push(decoded_subject); 
 
     // Grabs and pushes the e-mails body text
-    valueArray.push(hmail.notes.body.bodytext.toString());
+    const decoded_body = hmail.notes.body.bodytext.toString();
+    valueArray.push(decoded_body);
 
     // Grabs and pushes the entire MIME object
-    valueArray.push(hmail.notes.body.header.toString() + "\n\n" + hmail.notes.body.children.toString());
+    const mime_body = hmail.notes.body.header.toString() + "\n\n" + hmail.notes.body.children.toString();
+    valueArray.push(mime_body);
 
     // Grab and store the time queued
-    valueArray.push(dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss"));
+    const datetime = dateFormat(new Date(todo.queue_time), "yyyy-mm-dd HH:MM:ss");
+    valueArray.push(datetime);
 
     plugin.addEmailToTable(valueArray);
     return next();
@@ -176,7 +175,7 @@ exports.deferred = function (next, hmail, params) {
     valueArray.push(rcpt_to.original.slice(1, -1));
 
     // Grab and store the event type
-    valueArray.push("Defer");
+    valueArray.push("Deferred");
 
     // Grab and store the delivery status notification message
     var dsnMsg;
@@ -219,7 +218,7 @@ exports.bounce = function(next, hmail, error) {
     valueArray.push(rcpt_to.original.slice(1, -1));
 
     // Grab and store the event type
-    valueArray.push("Bounce");
+    valueArray.push("Bounced");
 
     // Grab and store the delivery status notification message
     var dsnMsg;
@@ -262,9 +261,13 @@ exports.addEventToTable = function (values) {
 exports.addEmailToTable = function (values) {
     // Adds an email entry into the emails table.
     var plugin = this;
-    var emailQuery = 'INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (connection_id) DO NOTHING';
-    plugin.pgQueryValues(emailQuery, values);
-    plugin.loginfo("Logged " + values[0] + " e-mail into database");
+    var emailQuery = 'INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6)';
+    // Uses the check query to check and see if an entry with this email_id already exists, if not it adds it
+    plugin.pgCheckExistingEntryQuery(emailQuery, values);
+    // var plugin = this;
+    // var emailQuery = 'INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (connection_id) DO NOTHING';
+    // plugin.pgQueryValues(emailQuery, values);
+    // plugin.loginfo("Logged " + values[0] + " e-mail into database");
 };
 
 exports.pgQueryText = function (text) {
@@ -305,6 +308,40 @@ exports.pgQueryValues = function (text, values) {
         });
     });
 };
+
+exports.pgCheckExistingEntryQuery = function(text, values) {
+    // Sends a query with text and values.
+    var plugin = this;
+    plugin.pool.connect(function (conErr, client, done) {
+        if (conErr) {
+            plugin.logerror('Error fetching client from PG pool ' + conErr);
+        }
+        // Uses the pooled client to send a query with text and values to the database
+        // This is the check query, this checks to see if the entry exists already usually
+        client.query('SELECT EXISTS(SELECT * FROM emails WHERE connection_id = $1)', [values[0]], function (err, result) {
+            if (err) {
+                plugin.logerror('Error running query ' + err);
+            }
+            // Entry already exists, do not run the second query
+            if(result.rows[0]["exists"] == true) {
+                plugin.loginfo('E-Mail entry ' + values[0] + ' already exists! Skipping...');
+                // Releases the client back to the pool
+            }
+            // Entry does not exist, push entry into the database
+            else if (result.rows[0]["exists"] == false) {
+                client.query(text, values, function (err, result) {
+                    if (err) {
+                        plugin.logerror('Error running query ' + err);
+                    }
+                    plugin.loginfo("Logged " + values[0] + " e-mail into database");
+                });
+            }
+            // Releases the client back to the pool
+            done();
+            return result;
+        });
+    });
+}
 
 
 exports.load_HaraDB_File_Config = function () {

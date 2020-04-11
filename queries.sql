@@ -11,3 +11,6 @@ INSERT INTO events(email_id, recipient, event_type, dsn_message, time) SELECT em
 
 /* E-Mails Table Creation */
 INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6)
+
+/* Check if email already exists in emails table */
+SELECT EXISTS(SELECT * FROM emails WHERE connection_id = $1)
