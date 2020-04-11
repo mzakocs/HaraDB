@@ -16,7 +16,11 @@ After you have that set up, HaraDB only requires 2 extra node.js packages:
 The first is for easy date formatting, the second is the PostgreSQL integration package.
 
 ## Release History
-
+* 1.2
+    * Fixed email_id sequence skipping numbers when an e-mail gets sent to more than one address
+    * Added compare query instead of using conflicts for above
+* 1.1
+    * Accidentally skipped a version number v_v
 * 1.0
     * Fully functioning logging system with PostgreSQL
     * Logs both main e-mails and events that occur with the e-mails
