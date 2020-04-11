@@ -18,7 +18,9 @@ The first is for easy date formatting, the second is the PostgreSQL integration 
 ## Release History
 
 * 1.0
-    * In Development
+    * Fully functioning logging system with PostgreSQL
+    * Logs both main e-mails and events that occur with the e-mails
+    * Uses pool and client system for efficient queries
 
 ## Meta
 
