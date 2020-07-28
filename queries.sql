@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS emails(email_id BIGSERIAL PRIMARY KEY NOT NULL, conne
 /* Events Table Insertion */
 INSERT INTO events(email_id, recipient, event_type, dsn_message, time) SELECT email_id, $2, $3, $4, $5 FROM emails WHERE connection_id = $1 LIMIT 1
 
-/* E-Mails Table Creation */
+/* E-Mails Table Insertion */
 INSERT INTO emails(connection_id, sender, subject, body, mime, time) VALUES ($1, $2, $3, $4, $5, $6)
 
 /* Check if email already exists in emails table */
