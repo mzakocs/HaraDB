@@ -1,10 +1,10 @@
 # HaraDB
 > A Haraka plugin written in Javascript for logging outbound e-mail traffic to a PostgreSQL database.
 
-Haraka has no built in logging functionality for easy overview of an outbound e-mail server, so this plugin was created to easily upload all outbound e-mail data into a PostgreSQL database. This can easily be converted to any other type of SQL database, and the specific amount of information uploaded from each e-mail can also be changed easily.  
+Haraka has no built in logging functionality for an outbound e-mail server, so this plugin was created to easily record all outbound e-mail data into a PostgreSQL database. This can easily be updated to any other type of SQL database, and the specific data uploaded from each e-mail can also be changed easily through a configuration file.  
 
 ## Requirements
-You must have a fully functioning outbound Haraka server already setup for this to work. I reccomend following this tutorial for getting that set up as it helped me a lot: 
+You must have an outbound Haraka server already setup for this to work. I reccomend following this tutorial for that: 
 > [Creating an E-Mail Service with Haraka](https://thihara.github.io/Creating-E-Mail-Service-with-Haraka/) 
  
 After you have that set up, HaraDB only requires 2 extra node.js packages:
@@ -36,7 +36,7 @@ Distributed under the GNU General Public License. See ``LICENSE`` for more infor
 
 ## How To Use
 
-Until I get the package up onto NPM, the plugin must be installed manually:
+Until the package is put onto NPM, the plugin must be installed manually:
 
 1. Download or clone the github repo.
 2. Drag "haradb.js" file into your plugins directory in your haraka server.
